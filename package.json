@@ -1,0 +1,40 @@
+{
+  "name": "timerich",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc -b && vite build && ait build",
+    "preview": "vite preview",
+    "build:vite": "vue-tsc -b && vite build",
+    "deploy": "ait deploy",
+    "dev:vite": "vite"
+  },
+  "dependencies": {
+    "vue": "^3.5.40",
+    "@apps-in-toss/web-framework": "latest"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "@vitejs/plugin-vue": "^6.0.8",
+    "@vue/tsconfig": "^0.9.1",
+    "typescript": "~6.0.2",
+    "vite": "^8.2.0",
+    "vue-tsc": "^3.3.8"
+  },
+  "createAitApp": {
+    "createViteVersion": "9.1.2",
+    "framework": "vue",
+    "isTypeScript": true,
+    "originalScripts": {
+      "build": "vue-tsc -b && vite build",
+      "dev": "vite"
+    },
+    "sampleEntryHash": null,
+    "sampleShellManaged": false,
+    "samples": [],
+    "source": "create-vite",
+    "template": null
+  }
+}
