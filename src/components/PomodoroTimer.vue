@@ -1,21 +1,188 @@
 <script setup lang="ts">
 import { ref, computed, watch, onUnmounted } from 'vue'
 
-// 상수를 정의합니다. (초 단위)
-const FOCUS_TIME_DEFAULT = 25 * 60
-const BREAK_TIME_DEFAULT = 5 * 60
+// 설정값 범위 및 기본값 (분 단위)
+const MIN_MINUTES = 1
+const MAX_MINUTES = 180
+const FOCUS_DEFAULT_MINUTES = 25
+const BREAK_DEFAULT_MINUTES = 5
+
+// localStorage에서 저장된 설정을 불러옵니다.
+const loadMinutes = (key: string, fallback: number) => {
+  try {
+    const saved = window.localStorage.getItem(key)
+    if (saved !== null) {
+      const parsed = parseInt(saved, 10)
+      if (Number.isFinite(parsed)) return Math.min(MAX_MINUTES, Math.max(MIN_MINUTES, parsed))
+    }
+  } catch (err) {
+    console.error('저장된 시간 설정을 불러오지 못했습니다:', err)
+  }
+  return fallback
+}
+
+// 집중/휴식 시간 설정 (분 단위, localStorage에 영속화)
+const focusMinutes = ref(loadMinutes('timerich:focusMinutes', FOCUS_DEFAULT_MINUTES))
+const breakMinutes = ref(loadMinutes('timerich:breakMinutes', BREAK_DEFAULT_MINUTES))
+
+const saveMinutes = () => {
+  try {
+    window.localStorage.setItem('timerich:focusMinutes', String(focusMinutes.value))
+    window.localStorage.setItem('timerich:breakMinutes', String(breakMinutes.value))
+  } catch (err) {
+    console.error('시간 설정을 저장하지 못했습니다:', err)
+  }
+}
+
+// 설정 패널 표시 여부 및 입력 초안값
+const showSettings = ref(false)
+const focusInput = ref(focusMinutes.value)
+const breakInput = ref(breakMinutes.value)
 
 // 퀵 테스트용 모드 지원 (집중 5초, 휴식 3초)
 const isTestMode = ref(false)
 
-const focusTime = computed(() => isTestMode.value ? 5 : FOCUS_TIME_DEFAULT)
-const breakTime = computed(() => isTestMode.value ? 3 : BREAK_TIME_DEFAULT)
+const focusTime = computed(() => isTestMode.value ? 5 : focusMinutes.value * 60)
+const breakTime = computed(() => isTestMode.value ? 3 : breakMinutes.value * 60)
+
+// 탭에 표시할 시간 라벨
+const focusTabLabel = computed(() => isTestMode.value ? '5초' : `${focusMinutes.value}분`)
+const breakTabLabel = computed(() => isTestMode.value ? '3초' : `${breakMinutes.value}분`)
+
+// --- 날짜별 기록 & 연속일 (localStorage 영속화) ---
+interface SessionEntry {
+  endTime: number
+  seconds: number
+}
+
+interface DayRecord {
+  date: string
+  focusCount: number
+  focusSeconds: number
+  sessions: SessionEntry[]
+}
+
+const HISTORY_KEY = 'timerich:history'
+const MAX_HISTORY_DAYS = 30
+const MAX_SESSIONS_PER_DAY = 50
+
+// 로컬 날짜 기준 YYYY-MM-DD 키
+const dateKey = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+
+const loadHistory = (): Record<string, DayRecord> => {
+  try {
+    const saved = window.localStorage.getItem(HISTORY_KEY)
+    if (saved) {
+      const parsed = JSON.parse(saved) as Record<string, DayRecord>
+      if (parsed && typeof parsed === 'object') {
+        for (const key of Object.keys(parsed)) {
+          const day = parsed[key]
+          if (!day || typeof day.focusCount !== 'number' || typeof day.focusSeconds !== 'number' || !Array.isArray(day.sessions)) {
+            delete parsed[key]
+          }
+        }
+        return parsed
+      }
+    }
+  } catch (err) {
+    console.error('집중 기록을 불러오지 못했습니다:', err)
+  }
+  return {}
+}
+
+const history = ref<Record<string, DayRecord>>(loadHistory())
+
+const pruneHistory = () => {
+  const keys = Object.keys(history.value).sort()
+  while (keys.length > MAX_HISTORY_DAYS) {
+    const oldest = keys.shift()
+    if (oldest === undefined) break
+    delete history.value[oldest]
+  }
+}
+
+const persistHistory = () => {
+  pruneHistory()
+  try {
+    window.localStorage.setItem(HISTORY_KEY, JSON.stringify(history.value))
+  } catch (err) {
+    console.error('집중 기록을 저장하지 못했습니다:', err)
+  }
+}
+
+// 오늘 기록 (없으면 생성)
+const getTodayRecord = () => {
+  const key = dateKey(new Date())
+  if (!history.value[key]) {
+    history.value[key] = { date: key, focusCount: 0, focusSeconds: 0, sessions: [] }
+  }
+  return history.value[key]
+}
+
+// 실행 중 1초마다 실제 집중 시간 누적
+const recordFocusSecond = () => {
+  getTodayRecord().focusSeconds++
+}
+
+// 화면 표시용 오늘 통계
+const todayStats = computed((): DayRecord => history.value[dateKey(new Date())] ?? { date: '', focusCount: 0, focusSeconds: 0, sessions: [] })
+const focusCount = computed(() => todayStats.value.focusCount)
+
+const todayFocusLabel = computed(() => {
+  const totalMin = Math.floor(todayStats.value.focusSeconds / 60)
+  if (totalMin >= 60) return `${Math.floor(totalMin / 60)}시간 ${totalMin % 60}분`
+  return `${totalMin}분`
+})
+
+// 2026년 최저시급 기준 오늘 번 돈 환산
+const MIN_WAGE_PER_HOUR = 10320
+
+const todayEarnings = computed(() =>
+  Math.floor(todayStats.value.focusSeconds / 3600 * MIN_WAGE_PER_HOUR)
+)
+
+const formattedEarnings = computed(() => `${todayEarnings.value.toLocaleString('ko-KR')}원`)
+const minWageLabel = computed(() => `${MIN_WAGE_PER_HOUR.toLocaleString('ko-KR')}원`)
+
+// 연속 집중일 (오늘 기록이 없으면 어제부터 소급)
+const streak = computed(() => {
+  let days = 0
+  const cursor = new Date()
+  if ((history.value[dateKey(cursor)]?.focusCount ?? 0) === 0) {
+    cursor.setDate(cursor.getDate() - 1)
+  }
+  while ((history.value[dateKey(cursor)]?.focusCount ?? 0) > 0) {
+    days++
+    cursor.setDate(cursor.getDate() - 1)
+  }
+  return days
+})
+
+// 최근 완료 세션 (최신순 최대 10개)
+const recentSessions = computed(() => {
+  const all: (SessionEntry & { date: string })[] = []
+  for (const day of Object.values(history.value)) {
+    for (const session of day.sessions) {
+      all.push({ ...session, date: day.date })
+    }
+  }
+  all.sort((a, b) => b.endTime - a.endTime)
+  return all.slice(0, 10)
+})
+
+const formatSessionTime = (timestamp: number) => {
+  const d = new Date(timestamp)
+  return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+const formatDuration = (seconds: number) =>
+  seconds >= 60 ? `${Math.round(seconds / 60)}분 집중` : `${seconds}초 집중`
 
 // 타이머 상태 관리
 const mode = ref<'focus' | 'break'>('focus')
 const currentTime = ref(focusTime.value)
 const isRunning = ref(false)
-const focusCount = ref(0)
 const hasNotificationPermission = ref(false)
 
 let timerId: number | null = null
@@ -96,7 +263,7 @@ const sendNotification = (title: string, body: string) => {
   if (hasNotificationPermission.value && 'Notification' in window) {
     new Notification(title, {
       body,
-      icon: '/favicon.ico' // 기본 파비콘 혹은 적절한 아이콘 경로 지정
+      icon: '/icons_light.png' // 시간부자 앱 아이콘 (라이트 모드)
     })
   }
 }
@@ -129,6 +296,7 @@ const startTimer = () => {
   timerId = window.setInterval(() => {
     if (currentTime.value > 0) {
       currentTime.value--
+      if (mode.value === 'focus') recordFocusSecond()
     } else {
       handleTimerComplete()
     }
@@ -141,6 +309,7 @@ const pauseTimer = () => {
     timerId = null
   }
   isRunning.value = false
+  persistHistory()
 }
 
 const resetTimer = () => {
@@ -152,10 +321,25 @@ const resetTimer = () => {
 const handleTimerComplete = () => {
   pauseTimer()
   playSound(mode.value)
-  
+
+  // 모바일 진동 알림 (지원 기기만)
+  try {
+    if ('vibrate' in navigator) {
+      navigator.vibrate(mode.value === 'focus' ? [200, 100, 200] : [150])
+    }
+  } catch (err) {
+    console.error('진동 알림 실패:', err)
+  }
+
   if (mode.value === 'focus') {
-    focusCount.value++
-    sendNotification('집중 완료!', '25분 집중 세션이 완료되었습니다! 이제 5분 동안 휴식을 시작하세요.')
+    const record = getTodayRecord()
+    record.focusCount++
+    record.sessions.push({ endTime: Date.now(), seconds: focusTime.value })
+    if (record.sessions.length > MAX_SESSIONS_PER_DAY) {
+      record.sessions.splice(0, record.sessions.length - MAX_SESSIONS_PER_DAY)
+    }
+    persistHistory()
+    sendNotification('집중 완료!', `${focusMinutes.value}분 집중 세션이 완료되었습니다! 이제 ${breakMinutes.value}분 동안 휴식을 시작하세요.`)
     
     // 휴식 모드로 자동 전환
     mode.value = 'break'
@@ -179,14 +363,65 @@ const toggleMode = (targetMode: 'focus' | 'break') => {
   resetTimer()
 }
 
-// 언마운트 시 타이머 클리어
+// 설정 패널 열기/닫기 (열 때 현재값을 입력란에 반영)
+const toggleSettings = () => {
+  showSettings.value = !showSettings.value
+  if (showSettings.value) {
+    focusInput.value = focusMinutes.value
+    breakInput.value = breakMinutes.value
+  }
+}
+
+// 입력값을 1~180분 범위로 보정
+const clampMinutes = (value: unknown, fallback: number) => {
+  const parsed = typeof value === 'number' ? Math.floor(value) : parseInt(String(value), 10)
+  if (!Number.isFinite(parsed)) return fallback
+  return Math.min(MAX_MINUTES, Math.max(MIN_MINUTES, parsed))
+}
+
+// 설정 적용 (입력 변경 시 호출)
+const applySettings = () => {
+  focusMinutes.value = clampMinutes(focusInput.value, focusMinutes.value)
+  breakMinutes.value = clampMinutes(breakInput.value, breakMinutes.value)
+  focusInput.value = focusMinutes.value
+  breakInput.value = breakMinutes.value
+  saveMinutes()
+  resetTimer()
+}
+
+// 기본값(집중 25분 / 휴식 5분)으로 되돌리기
+const resetToDefaults = () => {
+  focusMinutes.value = FOCUS_DEFAULT_MINUTES
+  breakMinutes.value = BREAK_DEFAULT_MINUTES
+  focusInput.value = focusMinutes.value
+  breakInput.value = breakMinutes.value
+  saveMinutes()
+  resetTimer()
+}
+
+// 탭이 숨겨질 때 기록 저장 (모바일 백그라운드 대응)
+const handleVisibilityChange = () => {
+  if (document.visibilityState === 'hidden') persistHistory()
+}
+document.addEventListener('visibilitychange', handleVisibilityChange)
+
+// 언마운트 시 타이머 클리어 및 기록 저장
 onUnmounted(() => {
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
+  persistHistory()
   if (timerId) clearInterval(timerId)
 })
 </script>
 
 <template>
   <div class="pomodoro-container" :class="[mode + '-mode', { 'is-running': isRunning }]">
+    <!-- 오늘 번 돈 (최저시급 환산, 상단 표시) -->
+    <div class="earnings-banner">
+      <span class="earnings-label">💰 오늘 번 돈</span>
+      <span class="earnings-amount">{{ formattedEarnings }}</span>
+      <span class="earnings-note">2026 최저시급 {{ minWageLabel }} 기준 · 오늘 {{ todayFocusLabel }} 집중</span>
+    </div>
+
     <!-- 앱 상단 알림 허용 배너 -->
     <div v-if="!hasNotificationPermission" class="permission-banner">
       <span>🔔 알림을 허용하면 타이머 종료 시 알림을 받을 수 있습니다.</span>
@@ -201,14 +436,14 @@ onUnmounted(() => {
           :class="{ active: mode === 'focus' }" 
           @click="toggleMode('focus')"
         >
-          🔥 집중 ({{ isTestMode ? '5초' : '25분' }})
+          🔥 집중 ({{ focusTabLabel }})
         </button>
         <button 
           class="tab-btn break-tab" 
           :class="{ active: mode === 'break' }" 
           @click="toggleMode('break')"
         >
-          🌿 휴식 ({{ isTestMode ? '3초' : '5분' }})
+          🌿 휴식 ({{ breakTabLabel }})
         </button>
       </div>
 
@@ -255,10 +490,56 @@ onUnmounted(() => {
           초기화
         </button>
       </div>
+    </div>
 
-      <!-- 하단 정보 세션 카운터 -->
-      <div class="session-counter">
-        🏆 오늘 완료한 집중 횟수: <span class="counter-num">{{ focusCount }}</span>
+    <!-- 나의 기록 카드 (연속일 / 오늘 집중 / 최근 세션) -->
+    <div class="record-card">
+      <div class="record-title">📊 나의 기록</div>
+      <div class="record-stats">
+        <div class="stat">
+          <span class="stat-value">🔥 {{ streak }}일</span>
+          <span class="stat-label">연속 집중</span>
+        </div>
+        <div class="stat">
+          <span class="stat-value">⏱️ {{ todayFocusLabel }}</span>
+          <span class="stat-label">오늘 집중</span>
+        </div>
+        <div class="stat">
+          <span class="stat-value">🏆 {{ focusCount }}회</span>
+          <span class="stat-label">오늘 완료</span>
+        </div>
+      </div>
+      <div class="history-title">최근 완료 세션</div>
+      <ul v-if="recentSessions.length > 0" class="history-list">
+        <li v-for="(session, index) in recentSessions" :key="`${session.endTime}-${index}`" class="history-item">
+          <span>{{ formatSessionTime(session.endTime) }}</span>
+          <span>{{ formatDuration(session.seconds) }}</span>
+        </li>
+      </ul>
+      <p v-else class="history-empty">아직 완료한 집중 세션이 없어요. 첫 세션을 시작해보세요!</p>
+    </div>
+
+    <!-- 시간 설정 메뉴 -->
+    <div class="settings-menu">
+      <button @click="toggleSettings" class="settings-toggle">
+        {{ showSettings ? '✕ 설정 닫기' : '⚙️ 시간 설정' }}
+      </button>
+      <div v-if="showSettings" class="settings-panel">
+        <label class="setting-row">
+          <span>🔥 집중 시간</span>
+          <span class="setting-input-wrap">
+            <input type="number" v-model.number="focusInput" :min="MIN_MINUTES" :max="MAX_MINUTES" @change="applySettings" />
+            <span class="unit">분</span>
+          </span>
+        </label>
+        <label class="setting-row">
+          <span>🌿 휴식 시간</span>
+          <span class="setting-input-wrap">
+            <input type="number" v-model.number="breakInput" :min="MIN_MINUTES" :max="MAX_MINUTES" @change="applySettings" />
+            <span class="unit">분</span>
+          </span>
+        </label>
+        <button @click="resetToDefaults" class="defaults-btn">기본값으로 되돌리기 (25분 / 5분)</button>
       </div>
     </div>
 
@@ -298,6 +579,41 @@ onUnmounted(() => {
   --theme-color: var(--break-color);
   --theme-bg-soft: var(--break-bg);
   --theme-border-soft: var(--break-border);
+}
+
+/* 오늘 번 돈 배너 (상단) */
+.earnings-banner {
+  width: 100%;
+  padding: 16px 20px;
+  background: linear-gradient(135deg, rgba(255, 179, 0, 0.12), rgba(255, 179, 0, 0.05));
+  border: 1px solid rgba(255, 179, 0, 0.35);
+  border-radius: 20px;
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 24px;
+  box-sizing: border-box;
+}
+
+.earnings-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.earnings-amount {
+  font-size: 32px;
+  font-weight: 800;
+  color: var(--text-h);
+  font-family: var(--mono);
+  line-height: 1.2;
+}
+
+.earnings-note {
+  font-size: 12px;
+  color: var(--text);
 }
 
 /* 알림 권한 허용 배너 */
@@ -512,21 +828,180 @@ onUnmounted(() => {
   background: var(--border);
 }
 
-/* 세션 카운터 */
-.session-counter {
-  font-size: 14px;
-  color: var(--text);
-  border-top: 1px solid var(--border);
-  padding-top: 20px;
+/* 나의 기록 카드 */
+.record-card {
   width: 100%;
-  text-align: center;
+  margin-top: 24px;
+  padding: 24px 20px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 24px;
+  box-shadow: var(--shadow);
+  box-sizing: border-box;
 }
 
-.counter-num {
-  font-weight: 700;
-  color: var(--theme-color);
+.record-title {
   font-size: 16px;
+  font-weight: 700;
+  color: var(--text-h);
+  margin-bottom: 16px;
+}
+
+.record-stats {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.stat {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 12px 4px;
+  background: var(--code-bg);
+  border-radius: 14px;
+}
+
+.stat-value {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-h);
   font-family: var(--mono);
+}
+
+.stat-label {
+  font-size: 12px;
+  color: var(--text);
+}
+
+.history-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-h);
+  text-align: left;
+  margin-bottom: 8px;
+}
+
+.history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.history-item {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  color: var(--text);
+  padding: 8px 12px;
+  background: var(--code-bg);
+  border-radius: 10px;
+  font-family: var(--mono);
+}
+
+.history-empty {
+  font-size: 13px;
+  color: var(--text);
+  margin: 0;
+}
+
+/* 시간 설정 메뉴 */
+.settings-menu {
+  margin-top: 24px;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.settings-toggle {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-h);
+  padding: 10px 20px;
+  border-radius: 14px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: var(--shadow);
+}
+
+.settings-toggle:hover {
+  border-color: var(--theme-color);
+  color: var(--theme-color);
+}
+
+.settings-panel {
+  width: 100%;
+  margin-top: 12px;
+  padding: 20px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-sizing: border-box;
+}
+
+.setting-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-h);
+}
+
+.setting-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.setting-input-wrap input {
+  width: 80px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 15px;
+  font-family: var(--mono);
+  text-align: center;
+  background: var(--code-bg);
+  color: var(--text-h);
+}
+
+.setting-input-wrap input:focus {
+  outline: none;
+  border-color: var(--theme-color);
+}
+
+.setting-input-wrap .unit {
+  font-size: 14px;
+  color: var(--text);
+}
+
+.defaults-btn {
+  border: none;
+  background: var(--code-bg);
+  color: var(--text);
+  padding: 10px 16px;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.defaults-btn:hover {
+  background: var(--border);
 }
 
 /* 퀵 설정 스위치 */

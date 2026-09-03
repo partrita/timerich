@@ -1,0 +1,22 @@
+{
+  "name": "시간부자",
+  "short_name": "시간부자",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
+  "icons": [
+    {
+      "src": "/icons_light.png",
+      "sizes": "600x584",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons_dark.png",
+      "sizes": "600x600",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}
