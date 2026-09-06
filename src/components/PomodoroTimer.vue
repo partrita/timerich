@@ -34,6 +34,25 @@ const saveMinutes = () => {
   }
 }
 
+// 테마 설정 ('system' | 'light' | 'dark')
+type ThemeMode = 'system' | 'light' | 'dark'
+const THEME_KEY = 'timerich:theme'
+const theme = ref<ThemeMode>((window.localStorage.getItem(THEME_KEY) as ThemeMode) || 'system')
+
+const applyTheme = (val: ThemeMode) => {
+  if (val === 'system') {
+    document.documentElement.removeAttribute('data-theme')
+  } else {
+    document.documentElement.setAttribute('data-theme', val)
+  }
+  try {
+    window.localStorage.setItem(THEME_KEY, val)
+  } catch (err) {
+    console.error('테마 설정 저장 실패:', err)
+  }
+}
+watch(theme, (newVal) => applyTheme(newVal), { immediate: true })
+
 // 설정 패널 표시 여부 및 입력 초안값
 const showSettings = ref(false)
 const focusInput = ref(focusMinutes.value)
@@ -268,20 +287,6 @@ const sendNotification = (title: string, body: string) => {
   }
 }
 
-// 알림 권한 체크 및 요청
-const requestNotificationPermission = async () => {
-  if (!('Notification' in window)) {
-    alert('이 브라우저는 알림 기능을 지원하지 않습니다.')
-    return
-  }
-  
-  try {
-    const permission = await Notification.requestPermission()
-    hasNotificationPermission.value = permission === 'granted'
-  } catch (err) {
-    console.error('알림 권한 요청 중 오류 발생:', err)
-  }
-}
 
 // 알림 권한 초기 상태 체크
 if ('Notification' in window) {
@@ -422,11 +427,6 @@ onUnmounted(() => {
       <span class="earnings-note">2026 최저시급 {{ minWageLabel }} 기준 · 오늘 {{ todayFocusLabel }} 집중</span>
     </div>
 
-    <!-- 앱 상단 알림 허용 배너 -->
-    <div v-if="!hasNotificationPermission" class="permission-banner">
-      <span>🔔 알림을 허용하면 타이머 종료 시 알림을 받을 수 있습니다.</span>
-      <button @click="requestNotificationPermission" class="banner-btn">알림 켜기</button>
-    </div>
     
     <div class="timer-card">
       <!-- 탭 메뉴 (집중 / 휴식 선택) -->
@@ -519,10 +519,10 @@ onUnmounted(() => {
       <p v-else class="history-empty">아직 완료한 집중 세션이 없어요. 첫 세션을 시작해보세요!</p>
     </div>
 
-    <!-- 시간 설정 메뉴 -->
+    <!-- 설정 메뉴 -->
     <div class="settings-menu">
       <button @click="toggleSettings" class="settings-toggle">
-        {{ showSettings ? '✕ 설정 닫기' : '⚙️ 시간 설정' }}
+        {{ showSettings ? '✕ 설정 닫기' : '⚙️ 설정' }}
       </button>
       <div v-if="showSettings" class="settings-panel">
         <label class="setting-row">
@@ -539,17 +539,49 @@ onUnmounted(() => {
             <span class="unit">분</span>
           </span>
         </label>
+
+        <!-- 화면 테마 설정 -->
+        <div class="setting-row">
+          <span>🎨 화면 테마</span>
+          <div class="theme-options">
+            <button 
+              type="button"
+              class="theme-btn" 
+              :class="{ active: theme === 'system' }" 
+              @click="theme = 'system'"
+            >
+              시스템
+            </button>
+            <button 
+              type="button"
+              class="theme-btn" 
+              :class="{ active: theme === 'light' }" 
+              @click="theme = 'light'"
+            >
+              ☀️ 라이트
+            </button>
+            <button 
+              type="button"
+              class="theme-btn" 
+              :class="{ active: theme === 'dark' }" 
+              @click="theme = 'dark'"
+            >
+              🌙 다크
+            </button>
+          </div>
+        </div>
+
+        <!-- 빠른 테스트 모드 (설정 내부로 통합) -->
+        <div class="setting-row">
+          <span>⚡ 빠른 테스트 (5초/3초)</span>
+          <label class="switch-container">
+            <input type="checkbox" v-model="isTestMode" />
+            <span class="slider"></span>
+          </label>
+        </div>
+
         <button @click="resetToDefaults" class="defaults-btn">기본값으로 되돌리기 (25분 / 5분)</button>
       </div>
-    </div>
-
-    <!-- 하단 퀵 설정 옵션 -->
-    <div class="timer-settings">
-      <label class="switch-container">
-        <input type="checkbox" v-model="isTestMode" />
-        <span class="slider"></span>
-        <span class="switch-label">⚡ 빠른 테스트 모드 활성화 (집중 5초 / 휴식 3초)</span>
-      </label>
     </div>
   </div>
 </template>
@@ -616,38 +648,6 @@ onUnmounted(() => {
   color: var(--text);
 }
 
-/* 알림 권한 허용 배너 */
-.permission-banner {
-  width: 100%;
-  padding: 12px 16px;
-  background: rgba(255, 179, 0, 0.1);
-  border: 1px solid rgba(255, 179, 0, 0.3);
-  border-radius: 12px;
-  font-size: 14px;
-  color: var(--text-h);
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 24px;
-  gap: 12px;
-  box-shadow: var(--shadow);
-  backdrop-filter: blur(10px);
-}
-
-.banner-btn {
-  background: var(--text-h);
-  color: var(--bg);
-  border: none;
-  padding: 6px 12px;
-  border-radius: 6px;
-  cursor: pointer;
-  font-weight: 500;
-  transition: opacity 0.2s;
-}
-
-.banner-btn:hover {
-  opacity: 0.9;
-}
 
 /* 메인 타이머 카드 */
 .timer-card {
@@ -988,6 +988,34 @@ onUnmounted(() => {
   color: var(--text);
 }
 
+.theme-options {
+  display: flex;
+  gap: 6px;
+}
+
+.theme-btn {
+  border: 1px solid var(--border);
+  background: var(--code-bg);
+  color: var(--text);
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.theme-btn:hover {
+  color: var(--text-h);
+}
+
+.theme-btn.active {
+  background: var(--theme-color);
+  color: #fff;
+  border-color: var(--theme-color);
+  font-weight: 600;
+}
+
 .defaults-btn {
   border: none;
   background: var(--code-bg);
@@ -1004,10 +1032,7 @@ onUnmounted(() => {
   background: var(--border);
 }
 
-/* 퀵 설정 스위치 */
-.timer-settings {
-  margin-top: 24px;
-}
+/* 빠른 테스트 모드 스위치 */
 
 .switch-container {
   display: inline-flex;
