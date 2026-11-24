@@ -12,8 +12,8 @@
     "dev:vite": "vite"
   },
   "dependencies": {
-    "vue": "^3.5.40",
-    "@apps-in-toss/web-framework": "latest"
+    "@apps-in-toss/web-framework": "latest",
+    "vue": "^3.5.42"
   },
   "devDependencies": {
     "@types/node": "^24.13.3",
